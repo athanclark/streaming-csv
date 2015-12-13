@@ -1,0 +1,58 @@
+name:                streaming-csv
+version:             0.1.0.0
+synopsis:            A simple csv statistics program
+description:         Please see README.md
+homepage:            http://github.com/githubuser/simple#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Athan Clark
+maintainer:          athan.clark@gmail.com
+copyright:           2015 Athan Clark
+category:            Web
+build-type:          Simple
+-- extra-source-files:
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     Lib
+  default-language:    Haskell2010
+  build-depends:       base >= 4.8 && < 5
+                     , bytestring
+                     , pipes-csv
+                     , pipes-bytestring
+                     , pipes-safe
+                     , pipes
+                     , pretty
+                     , stm
+                     , text
+
+executable streaming-csv
+  hs-source-dirs:      app
+  main-is:             Main.hs
+  ghc-options:         -threaded -eventlog -rtsopts -with-rtsopts=-N
+  build-depends:       base
+                     , streaming-csv
+                     , bytestring
+                     , pipes-csv
+                     , pipes-bytestring
+                     , pipes-safe
+                     , pipes
+                     , pretty
+                     , stm
+                     , text
+                     , mtl
+  default-language:    Haskell2010
+
+test-suite simple-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  build-depends:       base
+                     , simple
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  default-language:    Haskell2010
+
+source-repository head
+  type:     git
+  location: https://github.com/athanclark/streaming-csv
