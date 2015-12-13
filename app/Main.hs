@@ -13,9 +13,7 @@ import qualified Pipes.Prelude    as P
 import qualified Pipes.ByteString as PS
 
 import Text.PrettyPrint (render)
-import Control.Concurrent.STM
-import Control.Monad.Trans
-
+import Data.IORef
 
 
 sessions :: ( MonadIO m
@@ -24,8 +22,8 @@ sessions = decode HasHeader PS.stdin >-> P.concat
 
 main :: IO ()
 main = do
-  count <- newTVarIO initRowStat
+  count <- newIORef initRowStat
   runSafeT $ runEffect $
-    sessions >-> P.mapM_ (lift . atomically . modifyTVar' count . addRowStat)
-  total <- readTVarIO count
+    sessions >-> P.mapM_ (lift . modifyIORef' count . addRowStat)
+  total <- readIORef count
   putStrLn $ render (ppRowStat total)

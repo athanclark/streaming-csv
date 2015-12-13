@@ -15,6 +15,7 @@ import qualified Data.ByteString  as BS
 import           Text.PrettyPrint (Doc, (<>), (<+>), ($$))
 import qualified Text.PrettyPrint as PP
 import GHC.Generics -- I would make my own instance, but meh
+import Control.DeepSeq
 
 
 -- * Types
@@ -22,10 +23,10 @@ import GHC.Generics -- I would make my own instance, but meh
 -- | The subject-matter of the application - this is the type that is parsed,
 --   where each field may be null.
 data Session = Session
-  { sessionId  :: Maybe T.Text
-  , page       :: Maybe T.Text
-  , latency    :: Maybe Int
-  , timeOnPage :: Maybe Double
+  { sessionId  :: !(Maybe T.Text)
+  , page       :: !(Maybe T.Text)
+  , latency    :: !(Maybe Int)
+  , timeOnPage :: !(Maybe Double)
   } deriving (Show, Eq, Ord, Generic)
 
 instance ToRecord        Session
@@ -37,34 +38,41 @@ instance FromNamedRecord Session
 -- ** Statistics
 
 data NumStat a = NumStat
-  { numMin :: a
-  , numMax :: a
-  , numAvg :: a
-  } deriving (Show, Eq, Ord)
+  { numMin :: !a
+  , numMax :: !a
+  , numAvg :: !a
+  } deriving (Show, Eq, Ord, Generic)
 
+instance NFData a => NFData (NumStat a)
 
 -- | Based on the length of the 'Data.Text.Text' parsed
 data TextStat = TextStat
   { textMin :: {-# UNPACK #-} !Int
   , textMax :: {-# UNPACK #-} !Int
   , textAvg :: {-# UNPACK #-} !Int
-  } deriving (Show, Eq, Ord)
+  } deriving (Show, Eq, Ord, Generic)
+
+instance NFData TextStat
 
 
 -- | Parsing can fail for individual columns
 data ColStat a = ColStat
   { count     :: {-# UNPACK #-} !Int
   , nullCount :: {-# UNPACK #-} !Int
-  , mainStat  :: Maybe a
-  } deriving (Show, Eq, Ord)
+  , mainStat  :: !(Maybe a)
+  } deriving (Show, Eq, Ord, Generic)
+
+instance NFData a => NFData (ColStat a)
 
 -- | Mimicking the schema for 'Session'
 data RowStat = RowStat
-  { statSessionId  :: ColStat TextStat
-  , statPage       :: ColStat TextStat
-  , statLatency    :: ColStat (NumStat Int)
-  , statTimeOnPage :: ColStat (NumStat Double)
-  } deriving (Show, Eq, Ord)
+  { statSessionId  :: !(ColStat TextStat)
+  , statPage       :: !(ColStat TextStat)
+  , statLatency    :: !(ColStat (NumStat Int))
+  , statTimeOnPage :: !(ColStat (NumStat Double))
+  } deriving (Show, Eq, Ord, Generic)
+
+instance NFData RowStat
 
 
 -- * Incremental Statistics
@@ -83,11 +91,14 @@ addNumStat :: ( Num a
                 -> a             -- ^ Next element
                 -> NumStat a     -- ^ Previous Statistic
                 -> NumStat a
-addNumStat fromFractional toFractional count x (NumStat min' max' oldAvg) =
-  NumStat (min x min')
-          (max x max') $ fromFractional $
-            toFractional ((fromIntegral (count-1) * oldAvg) + x)
-          / fromIntegral count
+addNumStat fromFractional toFractional !count x (NumStat min' max' oldAvg) =
+  ((NumStat $! min x min')
+            $! max x max')
+            $! fromFractional $
+                  toFractional ((fromIntegral (count-1) * oldAvg) + x)
+                / fromIntegral count
+
+{-# INLINEABLE addNumStat #-}
 
 -- ** Textual
 
@@ -98,16 +109,19 @@ initTextStat t = TextStat len len len
 
 -- | Given the next element, and the count of all previous elements plus the
 --   added one, modfify a statistic to include the new element.
+--
+--   solution based on
+--   <http://math.stackexchange.com/questions/106700/incremental-averageing#answer-106720 this SO answer>
 addTextStat :: Int -- ^ Inclusive count
             -> T.Text
             -> TextStat
             -> TextStat
-addTextStat count t (TextStat min' max' oldAvg) =
-  TextStat (min (T.length t) min')
-           (max (T.length t) max') $ floor $
-          -- solution based on http://math.stackexchange.com/questions/106700/incremental-averageing#answer-106720
-             fromIntegral (((count-1) * oldAvg) + T.length t)
-           / fromIntegral count
+addTextStat !count !t (TextStat min' max' oldAvg) =
+  ((TextStat $! min (T.length t) min')
+             $! max (T.length t) max')
+             $! floor $
+                   fromIntegral (((count-1) * oldAvg) + T.length t)
+                 / fromIntegral count
 
 
 -- ** Per-Column
@@ -124,13 +138,13 @@ addColStat :: (Session -> Maybe x) -- ^ Get the element out of the 'Session'
            -> Session              -- ^ The session to add
            -> ColStat a            -- ^ The old statistic for the column
            -> ColStat a
-addColStat measure addMain initMain sid (ColStat c nc mMain) =
+addColStat measure addMain initMain !sid (ColStat !c !nc mMain) =
   case measure sid of
-    Nothing -> ColStat c (nc+1) mMain
-    Just x  -> ColStat (c+1) nc $
+    Nothing -> (ColStat c $! nc+1) mMain
+    Just x  -> (ColStat $! c+1) nc $
                  case mMain of
-                   Nothing -> Just (initMain x)
-                   Just m  -> Just (addMain x m)
+                   Nothing -> Just $! initMain x
+                   Just m  -> Just $! addMain x m
 
 -- ** Per-Row
 
@@ -139,16 +153,16 @@ initRowStat = RowStat initColStat initColStat initColStat initColStat
 
 -- | Add a session to the total statistics.
 addRowStat :: Session -> RowStat -> RowStat
-addRowStat sid (RowStat sid' page' lat' pagetime') =
-  RowStat (addColStat sessionId  addSid      initTextStat sid sid')
-          (addColStat page       addPage     initTextStat sid page')
-          (addColStat latency    addLat      initNumStat  sid lat')
-          (addColStat timeOnPage addPageTime initNumStat  sid pagetime')
+addRowStat sid (RowStat !sid' !page' !lat' !pagetime') = force $
+  (((RowStat $! addColStat sessionId  addSid      initTextStat sid sid')
+             $! addColStat page       addPage     initTextStat sid page')
+             $! addColStat latency    addLat      initNumStat  sid lat')
+             $! addColStat timeOnPage addPageTime initNumStat  sid pagetime'
   where
-    addSid      = addTextStat (count sid')
-    addPage     = addTextStat (count page')
-    addLat      = addNumStat floor fromIntegral (count lat')
-    addPageTime = addNumStat id    id           (count pagetime')
+    addSid      = addTextStat                   $! count sid'      + 1
+    addPage     = addTextStat                   $! count page'     + 1
+    addLat      = addNumStat floor fromIntegral $! count lat'      + 1
+    addPageTime = addNumStat id    id           $! count pagetime' + 1
 
 
 -- * Pretty-Printers
