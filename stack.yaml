@@ -6,6 +6,11 @@ resolver: nightly-2015-12-10
 # Local packages, usually specified by relative directory name
 packages:
 - '.'
+- location:
+    git: https://github.com/athanclark/median-set
+    commit: a0fd571c888c95ae84095554d16204db575ce2a8
+  extra-dep: true
+
 
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps: []

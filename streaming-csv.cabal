@@ -21,8 +21,9 @@ library
   build-depends:       base >= 4.8 && < 5
                      , bytestring
                      , deepseq
-                     , pipes-csv
+                     , median-set
                      , pipes-bytestring
+                     , pipes-csv
                      , pipes-safe
                      , pipes
                      , pretty
@@ -38,8 +39,9 @@ executable streaming-csv
                      , streaming-csv
                      , bytestring
                      , deepseq
-                     , pipes-csv
+                     , median-set
                      , pipes-bytestring
+                     , pipes-csv
                      , pipes-safe
                      , pipes
                      , pretty

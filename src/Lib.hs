@@ -7,7 +7,6 @@
 
 module Lib where
 
-import Data.Int (Int32, Int64)
 import Pipes.Csv
 import qualified Data.Text           as T
 import qualified Data.HashMap.Strict as HM
@@ -25,7 +24,7 @@ import Control.DeepSeq
 data Session = Session
   { sessionId  :: Maybe T.Text
   , page       :: Maybe T.Text
-  , latency    :: Maybe Int32
+  , latency    :: Maybe Int
   , timeOnPage :: Maybe Float
   } deriving (Show, Eq, Ord, Generic)
 
@@ -37,31 +36,26 @@ instance FromNamedRecord Session
 
 -- ** Statistics
 
+
 data NumStat a = NumStat
-  { numMin :: !a
-  , numMax :: !a
-  , numAvg :: !a
-  } deriving (Show, Eq, Ord, Generic)
+  { numMin   :: !a
+  , numMax   :: !a
+  , numTotal :: !a
+  , numCount :: {-# UNPACK #-} !Int
+  } deriving (Show, Eq, Ord)
 
-instance NFData a => NFData (NumStat a)
 
-
-newtype DistinctCount = DistinctCount
-  { getDistinctCount :: HM.HashMap T.Text Int64
+newtype TextDistinctCount = TextDistinctCount
+  { getTextDistinctCount :: HM.HashMap T.Text Int
   } deriving (Show, Eq, Generic, Monoid, NFData)
-
-addDistinctText :: T.Text -> DistinctCount -> DistinctCount
-addDistinctText t = DistinctCount
-                  . HM.insertWith (+) t 1
-                  . getDistinctCount
 
 
 -- | Based on the length of the 'Data.Text.Text' parsed
 data TextStat = TextStat
-  { textMin :: {-# UNPACK #-} !Int32
-  , textMax :: {-# UNPACK #-} !Int32
-  , textAvg :: {-# UNPACK #-} !Int32
-  , textDis :: !DistinctCount
+  { textMin   :: {-# UNPACK #-} !Int
+  , textMax   :: {-# UNPACK #-} !Int
+  , textTotal :: {-# UNPACK #-} !Int
+  , textDist  :: !TextDistinctCount
   } deriving (Show, Eq, Generic)
 
 instance NFData TextStat
@@ -69,22 +63,18 @@ instance NFData TextStat
 
 -- | Parsing can fail for individual columns
 data ColStat a = ColStat
-  { count     :: {-# UNPACK #-} !Int32
-  , nullCount :: {-# UNPACK #-} !Int32
+  { count     :: {-# UNPACK #-} !Int
+  , nullCount :: {-# UNPACK #-} !Int
   , mainStat  :: !(Maybe a)
-  } deriving (Show, Eq, Ord, Generic)
-
-instance NFData a => NFData (ColStat a)
+  } deriving (Show, Eq)
 
 -- | Mimicking the schema for 'Session'
 data RowStat = RowStat
   { statSessionId  :: !(ColStat TextStat)
   , statPage       :: !(ColStat TextStat)
-  , statLatency    :: !(ColStat (NumStat Int32))
+  , statLatency    :: !(ColStat (NumStat Int))
   , statTimeOnPage :: !(ColStat (NumStat Float))
-  } deriving (Show, Eq, Generic)
-
-instance NFData RowStat
+  } deriving (Show, Eq)
 
 
 -- * Incremental Statistics
@@ -92,49 +82,46 @@ instance NFData RowStat
 -- ** Numerical
 
 initNumStat :: Num a => a -> NumStat a
-initNumStat x = NumStat x x x
+initNumStat x = NumStat x x x 1
+
 
 -- | Change an existing statistic based on another element to add
 addNumStat :: ( Num a
               , Ord a
-              ) => (Float -> a) -- ^ @fromFractional@
-                -> (a -> Float) -- ^ @toFractional@
-                -> Int32        -- ^ /count/
-                -> a            -- ^ Next element
+              ) => a            -- ^ Next element
                 -> NumStat a    -- ^ Previous Statistic
                 -> NumStat a
-addNumStat fromFractional toFractional count' x (NumStat min' max' oldAvg) =
+addNumStat x (NumStat min' max' total' count') =
   NumStat (min x min')
-          (max x max') $!
-            oldAvg + fromFractional ((toFractional x - fromIntegral count')
-                                                     / fromIntegral count')
+          (max x max')
+          (total' + x)
+          (1 + count')
 
 {-# INLINEABLE addNumStat #-}
 
 -- ** Textual
 
 initTextStat :: T.Text -> TextStat
-initTextStat t = TextStat len len len mempty
+initTextStat t = TextStat len len len $ TextDistinctCount (HM.singleton t 1)
   where
-    len = fromIntegral $ T.length t
+    len = T.length t
+
+addDistinctText :: T.Text -> TextDistinctCount -> TextDistinctCount
+addDistinctText t = TextDistinctCount
+                  . HM.insertWith (+) t 1
+                  . getTextDistinctCount
 
 -- | Given the next element, and the count of all previous elements plus the
 --   added one, modfify a statistic to include the new element.
---
---   solution based on
---   <http://math.stackexchange.com/questions/106700/incremental-averageing#answer-106720 this SO answer>
-addTextStat :: Int32 -- ^ Inclusive count
-            -> T.Text
+addTextStat :: T.Text
             -> TextStat
             -> TextStat
-addTextStat count' t (TextStat min' max' oldAvg ds) =
-  let len :: Int32
-      len = fromIntegral $ T.length t
-  in  (TextStat (min len min')
-                (max len max') $!
-                oldAvg + floor (fromIntegral (len - count')
-                              / fromIntegral count' :: Float))
-                $! addDistinctText t ds
+addTextStat t (TextStat min' max' total' ds) =
+  let len = T.length t
+  in  TextStat (min len min')
+               (max len max')
+               (total' + len)
+               $! addDistinctText t ds
 
 
 -- ** Per-Column
@@ -168,54 +155,49 @@ initRowStat = RowStat initColStat initColStat initColStat initColStat
 -- | Add a session to the total statistics.
 addRowStat :: Session -> RowStat -> RowStat
 addRowStat sid (RowStat sid' page' lat' pagetime') =
-  RowStat (addColStat sessionId  addSid      initTextStat sid sid')
-          (addColStat page       addPage     initTextStat sid page')
-          (addColStat latency    addLat      initNumStat  sid lat')
-          (addColStat timeOnPage addPageTime initNumStat  sid pagetime')
-  where
-    addSid      = addTextStat                   $ count sid'      + 1
-    addPage     = addTextStat                   $ count page'     + 1
-    addLat      = addNumStat floor fromIntegral $ count lat'      + 1
-    addPageTime = addNumStat id    id           $ count pagetime' + 1
+  RowStat (addColStat sessionId  addTextStat initTextStat sid sid')
+          (addColStat page       addTextStat initTextStat sid page')
+          (addColStat latency    addNumStat  initNumStat  sid lat')
+          (addColStat timeOnPage addNumStat  initNumStat  sid pagetime')
 
 
 -- * Pretty-Printers
 
-ppNumStatInt :: NumStat Int32 -> Doc
-ppNumStatInt (NumStat min' max' avg') =
+ppNumStatInt :: NumStat Int -> Doc
+ppNumStatInt (NumStat min' max' total' count') =
   PP.vcat [ PP.text "min:" <+> PP.int (fromIntegral min')
           , PP.text "max:" <+> PP.int (fromIntegral max')
-          , PP.text "avg:" <+> PP.int (fromIntegral avg')
+          , PP.text "avg:" <+> PP.int (round $ fromIntegral total' / fromIntegral count')
           ]
 
 ppNumStatDouble :: NumStat Float -> Doc
-ppNumStatDouble (NumStat min' max' avg') =
+ppNumStatDouble (NumStat min' max' total' count') =
   PP.vcat [ PP.text "min:" <+> PP.float min'
           , PP.text "max:" <+> PP.float max'
-          , PP.text "avg:" <+> PP.float avg'
+          , PP.text "avg:" <+> PP.float (total' / fromIntegral count')
           ]
 
-ppDistinctCount :: DistinctCount -> Doc
-ppDistinctCount (DistinctCount xs) =
+ppTextDistinctCount :: TextDistinctCount -> Doc
+ppTextDistinctCount (TextDistinctCount xs) =
   PP.vcat $
     (\(k,v) -> PP.nest 5 $ PP.text (T.unpack k ++ ":") <+> PP.int (fromIntegral v))
       <$> (HM.toList xs)
 
 ppTextStat :: TextStat -> Doc
-ppTextStat (TextStat min' max' avg' dis') =
+ppTextStat (TextStat min' max' total' ds) =
   PP.vcat [ PP.text "min:" <+> PP.int (fromIntegral min')
           , PP.text "max:" <+> PP.int (fromIntegral max')
-          , PP.text "avg:" <+> PP.int (fromIntegral avg')
-          , PP.text "distincts:" <+> ppDistinctCount dis'
+          , PP.text "avg:" <+> PP.int (round $ fromIntegral total' / fromIntegral (sum $ getTextDistinctCount ds))
+          , PP.text "distincts:" <+> ppTextDistinctCount ds
           ]
 
 ppColStat :: (a -> Doc) -> ColStat a -> Doc
 ppColStat ppMain (ColStat count' nullcount mx) =
-  PP.vcat [ PP.nest 5 $ PP.text "count:"      <+> PP.int (fromIntegral count')
-          , PP.nest 5 $ PP.text "null count:" <+> PP.int (fromIntegral nullcount)
+  PP.vcat [ PP.nest 15 $ PP.text "count:"      <+> PP.int (fromIntegral count')
+          , PP.nest 15 $ PP.text "null count:" <+> PP.int (fromIntegral nullcount)
           , case mx of
-              Nothing -> PP.nest 5 $ PP.text "no non-nulls"
-              Just x  -> PP.nest 5 $ ppMain x
+              Nothing -> PP.nest 15 $ PP.text "no non-nulls"
+              Just x  -> PP.nest 15 $ ppMain x
           ]
 
 ppRowStat :: RowStat -> Doc
