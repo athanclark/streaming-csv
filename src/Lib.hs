@@ -6,13 +6,10 @@
 
 module Lib where
 
-import Pipes
 import Pipes.Csv
-import qualified Pipes.Prelude    as P
 import qualified Data.Text        as T
-import qualified Data.ByteString  as BS
 
-import           Text.PrettyPrint (Doc, (<>), (<+>), ($$))
+import           Text.PrettyPrint (Doc, (<+>))
 import qualified Text.PrettyPrint as PP
 import GHC.Generics -- I would make my own instance, but meh
 import Control.DeepSeq
@@ -23,10 +20,10 @@ import Control.DeepSeq
 -- | The subject-matter of the application - this is the type that is parsed,
 --   where each field may be null.
 data Session = Session
-  { sessionId  :: !(Maybe T.Text)
-  , page       :: !(Maybe T.Text)
-  , latency    :: !(Maybe Int)
-  , timeOnPage :: !(Maybe Double)
+  { sessionId  :: Maybe T.Text
+  , page       :: Maybe T.Text
+  , latency    :: Maybe Int
+  , timeOnPage :: Maybe Float
   } deriving (Show, Eq, Ord, Generic)
 
 instance ToRecord        Session
@@ -69,7 +66,7 @@ data RowStat = RowStat
   { statSessionId  :: !(ColStat TextStat)
   , statPage       :: !(ColStat TextStat)
   , statLatency    :: !(ColStat (NumStat Int))
-  , statTimeOnPage :: !(ColStat (NumStat Double))
+  , statTimeOnPage :: !(ColStat (NumStat Float))
   } deriving (Show, Eq, Ord, Generic)
 
 instance NFData RowStat
@@ -85,17 +82,17 @@ initNumStat x = NumStat x x x
 -- | Change an existing statistic based on another element to add
 addNumStat :: ( Num a
               , Ord a
-              ) => (Double -> a) -- ^ @fromFractional@
-                -> (a -> Double) -- ^ @toFractional@
+              ) => (Float -> a) -- ^ @fromFractional@
+                -> (a -> Float) -- ^ @toFractional@
                 -> Int           -- ^ /count/
                 -> a             -- ^ Next element
                 -> NumStat a     -- ^ Previous Statistic
                 -> NumStat a
-addNumStat fromFractional toFractional count x (NumStat min' max' oldAvg) =
+addNumStat fromFractional toFractional count' x (NumStat min' max' oldAvg) =
   NumStat (min x min')
           (max x max') $ fromFractional $
-            toFractional ((fromIntegral (count-1) * oldAvg) + x)
-          / fromIntegral count
+            toFractional ((fromIntegral (count'-1) * oldAvg) + x)
+          / fromIntegral count'
 
 {-# INLINEABLE addNumStat #-}
 
@@ -115,11 +112,11 @@ addTextStat :: Int -- ^ Inclusive count
             -> T.Text
             -> TextStat
             -> TextStat
-addTextStat count t (TextStat min' max' oldAvg) =
+addTextStat count' t (TextStat min' max' oldAvg) =
   TextStat (min (T.length t) min')
            (max (T.length t) max') $ floor $
-               fromIntegral (((count-1) * oldAvg) + T.length t)
-             / fromIntegral count
+               (fromIntegral (((count'-1) * oldAvg) + T.length t)
+              / fromIntegral count' :: Float)
 
 
 -- ** Per-Column
@@ -141,8 +138,9 @@ addColStat measure addMain initMain sid (ColStat c nc mMain) =
     Nothing -> ColStat c (nc+1) mMain
     Just x  -> ColStat (c+1) nc $
                  case mMain of
-                   Nothing -> Just $! initMain x -- crucial to get strict
-                   Just m  -> Just $! addMain x m
+                   Nothing -> Just $  initMain x
+                   Just m  -> Just $! addMain x m -- crucial to get strict
+
 
 -- ** Per-Row
 
@@ -172,11 +170,11 @@ ppNumStatInt (NumStat min' max' avg') =
           , PP.text "avg:" <+> PP.int avg'
           ]
 
-ppNumStatDouble :: NumStat Double -> Doc
+ppNumStatDouble :: NumStat Float -> Doc
 ppNumStatDouble (NumStat min' max' avg') =
-  PP.vcat [ PP.text "min:" <+> PP.double min'
-          , PP.text "max:" <+> PP.double max'
-          , PP.text "avg:" <+> PP.double avg'
+  PP.vcat [ PP.text "min:" <+> PP.float min'
+          , PP.text "max:" <+> PP.float max'
+          , PP.text "avg:" <+> PP.float avg'
           ]
 
 ppTextStat :: TextStat -> Doc
@@ -187,8 +185,8 @@ ppTextStat (TextStat min' max' avg') =
           ]
 
 ppColStat :: (a -> Doc) -> ColStat a -> Doc
-ppColStat ppMain (ColStat count nullcount mx) =
-  PP.vcat [ PP.nest 5 $ PP.text "count:" <+> PP.int count
+ppColStat ppMain (ColStat count' nullcount mx) =
+  PP.vcat [ PP.nest 5 $ PP.text "count:"      <+> PP.int count'
           , PP.nest 5 $ PP.text "null count:" <+> PP.int nullcount
           , case mx of
               Nothing -> PP.nest 5 $ PP.text "no non-nulls"
@@ -196,12 +194,12 @@ ppColStat ppMain (ColStat count nullcount mx) =
           ]
 
 ppRowStat :: RowStat -> Doc
-ppRowStat (RowStat sid page lat pagetime) =
+ppRowStat (RowStat sid page' lat pagetime) =
   PP.vcat [ PP.text "Session Id:"
           , PP.nest 2 $ ppColStat ppTextStat sid
 
           , PP.text "Page Id:"
-          , PP.nest 2 $ ppColStat ppTextStat page
+          , PP.nest 2 $ ppColStat ppTextStat page'
 
           , PP.text "Latency:"
           , PP.nest 2 $ ppColStat ppNumStatInt lat
