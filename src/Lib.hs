@@ -91,12 +91,11 @@ addNumStat :: ( Num a
                 -> a             -- ^ Next element
                 -> NumStat a     -- ^ Previous Statistic
                 -> NumStat a
-addNumStat fromFractional toFractional !count x (NumStat min' max' oldAvg) =
-  ((NumStat $! min x min')
-            $! max x max')
-            $! fromFractional $
-                  toFractional ((fromIntegral (count-1) * oldAvg) + x)
-                / fromIntegral count
+addNumStat fromFractional toFractional count x (NumStat min' max' oldAvg) =
+  NumStat (min x min')
+          (max x max') $ fromFractional $
+            toFractional ((fromIntegral (count-1) * oldAvg) + x)
+          / fromIntegral count
 
 {-# INLINEABLE addNumStat #-}
 
@@ -116,12 +115,11 @@ addTextStat :: Int -- ^ Inclusive count
             -> T.Text
             -> TextStat
             -> TextStat
-addTextStat !count !t (TextStat min' max' oldAvg) =
-  ((TextStat $! min (T.length t) min')
-             $! max (T.length t) max')
-             $! floor $
-                   fromIntegral (((count-1) * oldAvg) + T.length t)
-                 / fromIntegral count
+addTextStat count t (TextStat min' max' oldAvg) =
+  TextStat (min (T.length t) min')
+           (max (T.length t) max') $ floor $
+               fromIntegral (((count-1) * oldAvg) + T.length t)
+             / fromIntegral count
 
 
 -- ** Per-Column
@@ -138,12 +136,12 @@ addColStat :: (Session -> Maybe x) -- ^ Get the element out of the 'Session'
            -> Session              -- ^ The session to add
            -> ColStat a            -- ^ The old statistic for the column
            -> ColStat a
-addColStat measure addMain initMain !sid (ColStat !c !nc mMain) =
+addColStat measure addMain initMain sid (ColStat c nc mMain) =
   case measure sid of
-    Nothing -> (ColStat c $! nc+1) mMain
-    Just x  -> (ColStat $! c+1) nc $
+    Nothing -> ColStat c (nc+1) mMain
+    Just x  -> ColStat (c+1) nc $
                  case mMain of
-                   Nothing -> Just $! initMain x
+                   Nothing -> Just $! initMain x -- crucial to get strict
                    Just m  -> Just $! addMain x m
 
 -- ** Per-Row
@@ -153,16 +151,16 @@ initRowStat = RowStat initColStat initColStat initColStat initColStat
 
 -- | Add a session to the total statistics.
 addRowStat :: Session -> RowStat -> RowStat
-addRowStat sid (RowStat !sid' !page' !lat' !pagetime') = force $
-  (((RowStat $! addColStat sessionId  addSid      initTextStat sid sid')
-             $! addColStat page       addPage     initTextStat sid page')
-             $! addColStat latency    addLat      initNumStat  sid lat')
-             $! addColStat timeOnPage addPageTime initNumStat  sid pagetime'
+addRowStat sid (RowStat sid' page' lat' pagetime') =
+  RowStat (addColStat sessionId  addSid      initTextStat sid sid')
+          (addColStat page       addPage     initTextStat sid page')
+          (addColStat latency    addLat      initNumStat  sid lat')
+          (addColStat timeOnPage addPageTime initNumStat  sid pagetime')
   where
-    addSid      = addTextStat                   $! count sid'      + 1
-    addPage     = addTextStat                   $! count page'     + 1
-    addLat      = addNumStat floor fromIntegral $! count lat'      + 1
-    addPageTime = addNumStat id    id           $! count pagetime' + 1
+    addSid      = addTextStat                   $ count sid'      + 1
+    addPage     = addTextStat                   $ count page'     + 1
+    addLat      = addNumStat floor fromIntegral $ count lat'      + 1
+    addPageTime = addNumStat id    id           $ count pagetime' + 1
 
 
 -- * Pretty-Printers
