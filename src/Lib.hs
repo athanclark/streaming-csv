@@ -2,13 +2,15 @@
     OverloadedStrings
   , BangPatterns
   , DeriveGeneric
+  , GeneralizedNewtypeDeriving
   #-}
 
 module Lib where
 
-import Data.Int (Int32)
+import Data.Int (Int32, Int64)
 import Pipes.Csv
-import qualified Data.Text        as T
+import qualified Data.Text           as T
+import qualified Data.HashMap.Strict as HM
 
 import           Text.PrettyPrint (Doc, (<+>))
 import qualified Text.PrettyPrint as PP
@@ -43,12 +45,24 @@ data NumStat a = NumStat
 
 instance NFData a => NFData (NumStat a)
 
+
+newtype DistinctCount = DistinctCount
+  { getDistinctCount :: HM.HashMap T.Text Int64
+  } deriving (Show, Eq, Generic, Monoid, NFData)
+
+addDistinctText :: T.Text -> DistinctCount -> DistinctCount
+addDistinctText t = DistinctCount
+                  . HM.insertWith (+) t 1
+                  . getDistinctCount
+
+
 -- | Based on the length of the 'Data.Text.Text' parsed
 data TextStat = TextStat
   { textMin :: {-# UNPACK #-} !Int32
   , textMax :: {-# UNPACK #-} !Int32
   , textAvg :: {-# UNPACK #-} !Int32
-  } deriving (Show, Eq, Ord, Generic)
+  , textDis :: !DistinctCount
+  } deriving (Show, Eq, Generic)
 
 instance NFData TextStat
 
@@ -68,7 +82,7 @@ data RowStat = RowStat
   , statPage       :: !(ColStat TextStat)
   , statLatency    :: !(ColStat (NumStat Int32))
   , statTimeOnPage :: !(ColStat (NumStat Float))
-  } deriving (Show, Eq, Ord, Generic)
+  } deriving (Show, Eq, Generic)
 
 instance NFData RowStat
 
@@ -100,7 +114,7 @@ addNumStat fromFractional toFractional count' x (NumStat min' max' oldAvg) =
 -- ** Textual
 
 initTextStat :: T.Text -> TextStat
-initTextStat t = TextStat len len len
+initTextStat t = TextStat len len len mempty
   where
     len = fromIntegral $ T.length t
 
@@ -113,13 +127,14 @@ addTextStat :: Int32 -- ^ Inclusive count
             -> T.Text
             -> TextStat
             -> TextStat
-addTextStat count' t (TextStat min' max' oldAvg) =
+addTextStat count' t (TextStat min' max' oldAvg ds) =
   let len :: Int32
       len = fromIntegral $ T.length t
-  in  TextStat (min len min')
-               (max len max') $!
-               oldAvg + floor (fromIntegral (len - count')
-                             / fromIntegral count' :: Float)
+  in  (TextStat (min len min')
+                (max len max') $!
+                oldAvg + floor (fromIntegral (len - count')
+                              / fromIntegral count' :: Float))
+                $! addDistinctText t ds
 
 
 -- ** Per-Column
@@ -180,11 +195,18 @@ ppNumStatDouble (NumStat min' max' avg') =
           , PP.text "avg:" <+> PP.float avg'
           ]
 
+ppDistinctCount :: DistinctCount -> Doc
+ppDistinctCount (DistinctCount xs) =
+  PP.vcat $
+    (\(k,v) -> PP.nest 5 $ PP.text (T.unpack k ++ ":") <+> PP.int (fromIntegral v))
+      <$> (HM.toList xs)
+
 ppTextStat :: TextStat -> Doc
-ppTextStat (TextStat min' max' avg') =
+ppTextStat (TextStat min' max' avg' dis') =
   PP.vcat [ PP.text "min:" <+> PP.int (fromIntegral min')
           , PP.text "max:" <+> PP.int (fromIntegral max')
           , PP.text "avg:" <+> PP.int (fromIntegral avg')
+          , PP.text "distincts:" <+> ppDistinctCount dis'
           ]
 
 ppColStat :: (a -> Doc) -> ColStat a -> Doc

@@ -28,6 +28,7 @@ library
                      , pretty
                      , stm
                      , text
+                     , unordered-containers
 
 executable streaming-csv
   hs-source-dirs:      app
