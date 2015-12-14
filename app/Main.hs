@@ -23,7 +23,6 @@ sessions = decode HasHeader PS.stdin >-> P.concat
 main :: IO ()
 main = do
   count <- newIORef initRowStat
-  runSafeT $ runEffect $
-    sessions >-> P.mapM_ (lift . modifyIORef' count . addRowStat)
-  total <- readIORef count
+  total <- runSafeT . runEffect $
+             P.fold (flip addRowStat) initRowStat id sessions
   putStrLn $ render (ppRowStat total)
